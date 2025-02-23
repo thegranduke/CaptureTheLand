@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Two Player Land Capture Game</title>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background: #222;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        canvas { 
+            display: block; 
+            background: #111;
+            margin-top: 20px;
+        }
+        #scores {
+            color: white;
+            font-family: Arial, sans-serif;
+            margin-top: 10px;
+            display: flex;
+            gap: 20px;
+        }
+        .player-score {
+            padding: 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="scores">
+        <div class="player-score" style="background: #00ffff20">Player 1: 0%</div>
+        <div class="player-score" style="background: #80008020">Player 2: 0%</div>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const player1ScoreElement = document.querySelector('.player-score:nth-child(1)');
+        const player2ScoreElement = document.querySelector('.player-score:nth-child(2)');
+        
+        canvas.width = 800;
+        canvas.height = 500;
+
+        const TILE_SIZE = 10;
+        const MOVEMENT_SPEED = TILE_SIZE;
+        let speed = 20;
+        let lastTime = 0;
+        const targetFrameTime = 1000 / speed;
+
+        let players, lands, trails;
+        let gameOver = false;
+        let lastPositions;
+
+        function resetGame() {
+            players = [
+                {
+                    x: Math.floor(canvas.width / 4),
+                    y: Math.floor(canvas.height / 2),
+                    size: TILE_SIZE,
+                    color: "#00ffff",
+                    dx: MOVEMENT_SPEED,
+                    dy: 0,
+                    direction: 'right',
+                    controls: {up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight'},
+                    id: 0
+                },
+                {
+                    x: Math.floor(3 * canvas.width / 4),
+                    y: Math.floor(canvas.height / 2),
+                    size: TILE_SIZE,
+                    color: "#800080",
+                    dx: -MOVEMENT_SPEED,
+                    dy: 0,
+                    direction: 'left',
+                    controls: {up: 'w', down: 's', left: 'a', right: 'd'},
+                    id: 1
+                }
+            ];
+            
+            lands = [new Set(), new Set()];
+            trails = [new Set(), new Set()];
+            gameOver = false;
+            lastPositions = [null, null];
+
+            // Initialize starting lands for both players
+            players.forEach((player, index) => {
+                const startSize = 5;
+                const startX = Math.floor(player.x / TILE_SIZE) * TILE_SIZE;
+                const startY = Math.floor(player.y / TILE_SIZE) * TILE_SIZE;
+                
+                for (let i = -startSize; i <= startSize; i++) {
+                    for (let j = -startSize; j <= startSize; j++) {
+                        lands[index].add(getKey(
+                            startX + (i * TILE_SIZE),
+                            startY + (j * TILE_SIZE)
+                        ));
+                    }
+                }
+            });
+
+            updateScores();
+        }
+
+        function getKey(x, y) {
+            const gridX = Math.floor(x / TILE_SIZE) * TILE_SIZE;
+            const gridY = Math.floor(y / TILE_SIZE) * TILE_SIZE;
+            return `${gridX},${gridY}`;
+        }
+
+        function drawPlayers() {
+            players.forEach(player => {
+                ctx.fillStyle = player.color;
+                ctx.fillRect(player.x, player.y, player.size, player.size);
+            });
+        }
+
+        function checkTrailCollision(x, y, playerId) {
+            const currentKey = getKey(x, y);
+            
+            // Check collision with opponent's trail
+            const opponentId = (playerId + 1) % 2;
+            if (trails[opponentId].has(currentKey)) {
+                gameOver = true;
+                alert(`Game Over! Player ${opponentId + 1} wins!`);
+                resetGame();
+                return true;
+            }
+
+            // Check collision with own trail
+            if (trails[playerId].has(currentKey)) {
+                if (lastPositions[playerId] && currentKey !== getKey(lastPositions[playerId].x, lastPositions[playerId].y)) {
+                    gameOver = true;
+                    alert(`Game Over! Player ${playerId + 1} hit their own trail!`);
+                    resetGame();
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function movePlayers() {
+            if (gameOver) return;
+
+            players.forEach((player, index) => {
+                let nextX = player.x + player.dx;
+                let nextY = player.y + player.dy;
+
+                // Stop at canvas boundaries
+                if (nextX < 0) {
+                    nextX = 0;
+                    player.dx = 0;
+                } else if (nextX > canvas.width - player.size) {
+                    nextX = canvas.width - player.size;
+                    player.dx = 0;
+                }
+                
+                if (nextY < 0) {
+                    nextY = 0;
+                    player.dy = 0;
+                } else if (nextY >= canvas.height - player.size) {
+                    nextY = canvas.height - player.size;
+                    player.dy = 0;
+                }
+
+                // Check if the next position would hit a trail
+                if (checkTrailCollision(nextX, nextY, index)) {
+                    return;
+                }
+
+                player.x = nextX;
+                player.y = nextY;
+                
+                const newKey = getKey(player.x, player.y);
+
+                // If we're not on owned land, create a trail
+                if (!lands[index].has(newKey)) {
+                    if (!trails[index].has(newKey)) {
+                        lastPositions[index] = {x: player.x, y: player.y};
+                        trails[index].add(newKey);
+                    }
+                } else if (trails[index].size > 0) {
+                    // We're back on owned land and have a trail
+                    captureLand(index);
+                    updateScores();
+                    lastPositions[index] = null;
+                }
+            });
+        }
+
+        function floodFill(startX, startY, visited, playerId) {
+        const queue = [[startX, startY]];
+        const area = new Set();
+        let isOutside = false;
+
+        while (queue.length > 0) {
+            const [x, y] = queue.pop();
+            const key = getKey(x, y);
+
+            if (visited.has(key)) continue;
+            visited.add(key);
+
+            // Check if we've hit the canvas boundary
+            if (x < 0 || x >= canvas.width || y < 0 || y >= canvas.height) {
+                isOutside = true;
+                continue;
+            }
+
+            // If this position is not part of the trail and not part of the player's territory
+            if (!trails[playerId].has(key) && !lands[playerId].has(key)) {
+                area.add(key);
+                
+                // Check all adjacent cells
+                queue.push([x + TILE_SIZE, y]);
+                queue.push([x - TILE_SIZE, y]);
+                queue.push([x, y + TILE_SIZE]);
+                queue.push([x, y - TILE_SIZE]);
+            }
+        }
+
+        return { area, isOutside };
+    }
+
+    function captureLand(playerId) {
+        const opponentId = (playerId + 1) % 2;
+        const visited = new Set();
+        
+        // First, find all empty or opponent-owned spaces
+        for (let x = 0; x < canvas.width; x += TILE_SIZE) {
+            for (let y = 0; y < canvas.height; y += TILE_SIZE) {
+                const key = getKey(x, y);
+                
+                // Skip if we've already visited this cell or if it's part of the player's trail/territory
+                if (visited.has(key) || trails[playerId].has(key) || lands[playerId].has(key)) {
+                    continue;
+                }
+
+                // Try to flood fill from this position
+                const { area, isOutside } = floodFill(x, y, visited, playerId);
+                
+                // If the area is not connected to the outside, capture it
+                if (!isOutside && area.size > 0) {
+                    // Capture all tiles in the enclosed area
+                    area.forEach(key => {
+                        // Remove from opponent if they own it
+                        lands[opponentId].delete(key);
+                        // Add to player's territory
+                        lands[playerId].add(key);
+                    });
+                }
+            }
+        }
+
+        // Add the trail to the player's territory
+        trails[playerId].forEach(key => {
+            lands[opponentId].delete(key);
+            lands[playerId].add(key);
+        });
+
+        // Clear the trail
+        trails[playerId].clear();
+    }
+
+        function updateScores() {
+            const totalTiles = (canvas.width / TILE_SIZE) * (canvas.height / TILE_SIZE);
+            const percentages = lands.map(land => (land.size / totalTiles * 100).toFixed(1));
+            player1ScoreElement.textContent = `Player 1: ${percentages[0]}%`;
+            player2ScoreElement.textContent = `Player 2: ${percentages[1]}%`;
+        }
+
+        function drawLands() {
+            players.forEach((player, index) => {
+                ctx.fillStyle = player.color;
+                ctx.globalAlpha = 0.3;
+                lands[index].forEach(key => {
+                    let [x, y] = key.split(',').map(Number);
+                    ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+                });
+            });
+            ctx.globalAlpha = 1;
+        }
+
+        function drawTrails() {
+            players.forEach((player, index) => {
+                ctx.fillStyle = player.color;
+                ctx.globalAlpha = 0.8;
+                trails[index].forEach(key => {
+                    let [x, y] = key.split(',').map(Number);
+                    ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+                });
+            });
+            ctx.globalAlpha = 1;
+        }
+
+        function drawGrid() {
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 0.5;
+            
+            for (let x = 0; x < canvas.width; x += TILE_SIZE) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+            
+            for (let y = 0; y < canvas.height; y += TILE_SIZE) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
+            }
+        }
+
+        function update(currentTime) {
+            if (currentTime - lastTime >= targetFrameTime) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                drawGrid();
+                drawLands();
+                drawTrails();
+                movePlayers();
+                drawPlayers();
+                lastTime = currentTime;
+            }
+            requestAnimationFrame(update);
+        }
+
+        document.addEventListener("keydown", (e) => {
+            if (gameOver) return;
+            
+            players.forEach(player => {
+                const key = e.key.toLowerCase();
+                // Only allow 90-degree turns (no reversing direction)
+                if (key === player.controls.up.toLowerCase() && player.direction !== 'down' && player.direction !== 'up') {
+                    player.dx = 0;
+                    player.dy = -MOVEMENT_SPEED;
+                    player.direction = 'up';
+                }
+                else if (key === player.controls.down.toLowerCase() && player.direction !== 'up' && player.direction !== 'down') {
+                    player.dx = 0;
+                    player.dy = MOVEMENT_SPEED;
+                    player.direction = 'down';
+                }
+                else if (key === player.controls.left.toLowerCase() && player.direction !== 'right' && player.direction !== 'left') {
+                    player.dx = -MOVEMENT_SPEED;
+                    player.dy = 0;
+                    player.direction = 'left';
+                }
+                else if (key === player.controls.right.toLowerCase() && player.direction !== 'left' && player.direction !== 'right') {
+                    player.dx = MOVEMENT_SPEED;
+                    player.dy = 0;
+                    player.direction = 'right';
+                }
+            });
+        });
+
+        resetGame();
+        requestAnimationFrame(update);
+    </script>
+</body>
+</html>
